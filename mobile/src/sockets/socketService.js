@@ -1,6 +1,6 @@
 import { io } from "socket.io-client";
-import { SERVER_URL } from "../constants/config";
 import { getStoredToken } from "../api/authApi";
+import { getServerUrl } from "../utils/urlConfig";
 
 class SocketService {
   socket = null;
@@ -14,7 +14,9 @@ class SocketService {
       throw new Error("No auth token found — cannot connect socket");
     }
 
-    this.socket = io(SERVER_URL, {
+    const serverUrl = await getServerUrl();
+
+    this.socket = io(serverUrl, {
       auth: { token },
       transports: ["websocket"],
       reconnection: true,
@@ -52,6 +54,10 @@ class SocketService {
     return this.socket;
   }
 
+  isConnected() {
+    return this.socket?.connected === true;
+  }
+
   joinRoom(roomId) {
     this.socket?.emit("join_room", roomId);
   }
@@ -61,12 +67,12 @@ class SocketService {
   }
 
   // Returns a promise so the UI can flip "sending" -> "sent" / show an error
-  sendMessage({ roomId, content, type = "text" }) {
+  sendMessage({ roomId, content, type = "text", replyTo }) {
     return new Promise((resolve, reject) => {
       if (!this.socket?.connected) {
         return reject(new Error("Socket not connected"));
       }
-      this.socket.emit("send_message", { roomId, content, type }, (ack) => {
+      this.socket.emit("send_message", { roomId, content, type, replyTo }, (ack) => {
         if (ack?.success) resolve(ack.message);
         else reject(new Error(ack?.error || "send_message failed"));
       });

@@ -1,13 +1,16 @@
 import axios from "axios";
 import { getItem } from "../utils/storage";
-import { SERVER_URL } from "../constants/config";
+import { getServerUrl } from "../utils/urlConfig";
 
 const axiosClient = axios.create({
-  baseURL: `${SERVER_URL}/api`,
   timeout: 10000,
 });
 
+// Inject dynamic baseURL and JWT token before every request
 axiosClient.interceptors.request.use(async (config) => {
+  const serverUrl = await getServerUrl();
+  config.baseURL = `${serverUrl}/api`;
+
   const token = await getItem("jwt");
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;

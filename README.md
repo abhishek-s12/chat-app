@@ -23,6 +23,7 @@ A complete, feature-rich real-time messaging application featuring a cross-platf
 ## 🏗️ Repository Structure
 
 This repository is split into two self-contained directories:
+
 ```
 chat-app/
 ├── server/       # Node.js/Express backend & Socket.io server
@@ -34,6 +35,7 @@ chat-app/
 ## 🚀 Getting Started
 
 ### 1. Prerequisites
+
 - **Node.js** (v16+)
 - **MongoDB** (Local instance or MongoDB Atlas cloud URI)
 - **Cloudinary Account** (For image and avatar hosting)
@@ -52,6 +54,7 @@ chat-app/
    ```
 3. Configure your Environment Variables:
    Create a `.env` file in the `server/` directory and configure the variables (use `.env.example` as a template):
+
    ```env
    PORT=5000
    MONGO_URI=your_mongodb_connection_uri
@@ -62,6 +65,7 @@ chat-app/
    CLOUDINARY_API_KEY=your_cloudinary_api_key
    CLOUDINARY_API_SECRET=your_cloudinary_api_secret
    ```
+
 4. Start the backend development server:
    ```bash
    npm run dev
