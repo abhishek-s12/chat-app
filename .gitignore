@@ -1,0 +1,12 @@
+# Dependency folders
+node_modules/
+
+# Environment files
+.env
+.env*.local
+
+# System/IDE configs
+.idea/
+.vscode/
+.DS_Store
+.gemini/

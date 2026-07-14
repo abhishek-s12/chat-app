@@ -1,0 +1,1 @@
+export const SERVER_URL = "http://192.168.1.6:5000"; // not localhost — use LAN IP for physical device/simulator
