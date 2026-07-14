@@ -1,35 +1,27 @@
 const express = require("express");
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
+const cloudinary = require("cloudinary").v2;
 const authMiddleware = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-// Ensure uploads directory exists inside server/uploads
-const uploadDir = path.join(__dirname, "../../uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname));
-  },
+// Configure Cloudinary credentials
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
+
+// Store uploaded files in RAM memory as a Buffer
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // limit 10MB
   fileFilter: (req, file, cb) => {
     const filetypes = /jpeg|jpg|png|gif|webp/;
-    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = filetypes.test(file.mimetype);
-    if (mimetype && extname) {
+    if (mimetype) {
       return cb(null, true);
     }
     cb(new Error("Only images are allowed (jpeg, jpg, png, gif, webp)!"));
@@ -43,12 +35,29 @@ router.post("/upload", upload.single("image"), (req, res) => {
     return res.status(400).json({ message: "No file uploaded" });
   }
 
-  // Generate public file URL using server port
-  const protocol = req.protocol;
-  const host = req.get("host");
-  const imageUrl = `${protocol}://${host}/uploads/${req.file.filename}`;
+  // Check if Cloudinary is configured
+  if (
+    !process.env.CLOUDINARY_CLOUD_NAME ||
+    process.env.CLOUDINARY_CLOUD_NAME === "your_cloud_name"
+  ) {
+    return res.status(500).json({
+      message: "Cloudinary is not configured. Please fill in your credentials in the server .env file.",
+    });
+  }
 
-  res.status(200).json({ url: imageUrl });
+  // Create stream to upload directly to Cloudinary
+  const uploadStream = cloudinary.uploader.upload_stream(
+    { folder: "chat_app_uploads" },
+    (error, result) => {
+      if (error) {
+        return res.status(500).json({ message: "Cloudinary upload failed", error: error.message });
+      }
+      res.status(200).json({ url: result.secure_url });
+    }
+  );
+
+  // Pipe the buffer
+  uploadStream.end(req.file.buffer);
 });
 
 module.exports = router;

@@ -12,7 +12,11 @@ const getMessages = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
-      .populate("sender", "username avatar");
+      .populate("sender", "username avatar")
+      .populate({
+        path: "replyTo",
+        populate: { path: "sender", select: "username" },
+      });
 
     res.json({ messages: messages.reverse(), page });
   } catch (err) {

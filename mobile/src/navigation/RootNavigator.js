@@ -7,6 +7,7 @@ import ConversationListScreen from "../screens/chat/ConversationListScreen";
 import ChatRoomScreen from "../screens/chat/ChatRoomScreen";
 import NewChatScreen from "../screens/chat/NewChatScreen";
 import CreateGroupScreen from "../screens/chat/CreateGroupScreen";
+import ProfileSettingsScreen from "../screens/settings/ProfileSettingsScreen";
 import { useAuth } from "../context/AuthContext";
 
 
@@ -32,6 +33,13 @@ export default function RootNavigator() {
             component={ConversationListScreen}
             options={({ navigation }) => ({
               title: "Chats",
+              headerLeft: () => (
+                <Button
+                  onPress={() => navigation.navigate("ProfileSettings")}
+                  title="Profile"
+                  color="#007aff"
+                />
+              ),
               headerRight: () => (
                 <Button
                   onPress={() => navigation.navigate("NewChat")}
@@ -55,6 +63,11 @@ export default function RootNavigator() {
             name="CreateGroup"
             component={CreateGroupScreen}
             options={{ title: "Create Group" }} 
+          />
+          <Stack.Screen 
+            name="ProfileSettings"
+            component={ProfileSettingsScreen}
+            options={{ title: "Profile Settings" }} 
           />
         </Stack.Navigator>
       ) : (

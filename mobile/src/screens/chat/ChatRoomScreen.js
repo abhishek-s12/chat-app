@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  Modal,
 } from "react-native";
 import socketService from "../../sockets/socketService";
 import useSocketListener from "../../hooks/useSocketListener";
@@ -17,6 +18,7 @@ import * as ImagePicker from "expo-image-picker";
 import axiosClient from "../../api/axiosClient";
 import { getStoredToken } from "../../api/authApi";
 import { jwtDecode } from "jwt-decode";
+import BouncingDots from "../../components/BouncingDots";
 
 export default function ChatRoomScreen({ route }) {
   const { roomId, currentUserId: paramUserId } = route.params;
@@ -25,7 +27,21 @@ export default function ChatRoomScreen({ route }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [otherTyping, setOtherTyping] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [activeMessageAction, setActiveMessageAction] = useState(null);
   const typingTimeout = useRef(null);
+
+  // Mark incoming messages as read
+  const markMessagesAsRead = useCallback(
+    (msgs) => {
+      msgs.forEach((m) => {
+        if (m.sender?._id !== currentUserId && m.status !== "read") {
+          socketService.getSocket().emit("message_read", { messageId: m._id, roomId });
+        }
+      });
+    },
+    [roomId, currentUserId]
+  );
 
   // Resolve userId on mount if not provided in params
   useEffect(() => {
@@ -42,7 +58,7 @@ export default function ChatRoomScreen({ route }) {
         }
       })();
     }
-  }, []);
+  }, [currentUserId]);
 
   // Load history + join the room on mount
   useEffect(() => {
@@ -50,10 +66,12 @@ export default function ChatRoomScreen({ route }) {
       const history = await fetchMessages(roomId);
       setMessages(history);
       socketService.joinRoom(roomId);
+      // Wait a brief moment for currentUserId to load before marking as read
+      setTimeout(() => markMessagesAsRead(history), 200);
     })();
 
     return () => socketService.leaveRoom(roomId);
-  }, [roomId]);
+  }, [roomId, markMessagesAsRead]);
 
   // New message arrives in real time
   useSocketListener(
@@ -62,7 +80,6 @@ export default function ChatRoomScreen({ route }) {
       (msg) => {
         if (msg.room !== roomId) return;
         setMessages((prev) => {
-          // Dedupe in case the message is already in the list (e.g. via ack)
           if (prev.some((m) => m._id === msg._id)) return prev;
 
           // If there is an optimistic "sending" bubble matching this content, replace it
@@ -77,6 +94,38 @@ export default function ChatRoomScreen({ route }) {
 
           return [...prev, msg];
         });
+
+        // Automatically mark as read if received from others
+        if (msg.sender?._id !== currentUserId) {
+          socketService.getSocket().emit("message_read", { messageId: msg._id, roomId });
+        }
+      },
+      [roomId, currentUserId]
+    )
+  );
+
+  // Message status update (delivered / read)
+  useSocketListener(
+    "message_status_update",
+    useCallback(
+      ({ messageId, status }) => {
+        setMessages((prev) =>
+          prev.map((m) => (m._id === messageId ? { ...m, status } : m))
+        );
+      },
+      []
+    )
+  );
+
+  // Reaction updates in real time
+  useSocketListener(
+    "message_reaction_update",
+    useCallback(
+      (msg) => {
+        if (msg.room !== roomId) return;
+        setMessages((prev) =>
+          prev.map((m) => (m._id === msg._id ? msg : m))
+        );
       },
       [roomId]
     )
@@ -110,6 +159,10 @@ export default function ChatRoomScreen({ route }) {
     setInput("");
     socketService.emitStopTyping(roomId);
 
+    // Save replyTo reference and reset
+    const replyRef = replyingTo;
+    setReplyingTo(null);
+
     // Optimistic bubble
     const tempId = `temp-${Date.now()}`;
     const optimisticMsg = {
@@ -118,12 +171,17 @@ export default function ChatRoomScreen({ route }) {
       sender: { _id: currentUserId },
       content,
       status: "sending",
+      replyTo: replyRef,
       createdAt: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, optimisticMsg]);
 
     try {
-      const saved = await socketService.sendMessage({ roomId, content });
+      const saved = await socketService.sendMessage({
+        roomId,
+        content,
+        replyTo: replyRef?._id,
+      });
       setMessages((prev) =>
         prev.map((m) => (m._id === tempId ? saved : m))
       );
@@ -177,6 +235,9 @@ export default function ChatRoomScreen({ route }) {
       }
       formData.append("image", fileToUpload);
 
+      const replyRef = replyingTo;
+      setReplyingTo(null);
+
       // Optimistic bubble
       const tempId = `temp-${Date.now()}`;
       const optimisticMsg = {
@@ -186,6 +247,7 @@ export default function ChatRoomScreen({ route }) {
         content: uri,
         type: "image",
         status: "sending",
+        replyTo: replyRef,
         createdAt: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, optimisticMsg]);
@@ -198,31 +260,89 @@ export default function ChatRoomScreen({ route }) {
 
       const imageUrl = data.url;
 
+      // Update optimistic bubble content to the uploaded URL so broadcast matcher works
+      setMessages((prev) =>
+        prev.map((m) => (m._id === tempId ? { ...m, content: imageUrl } : m))
+      );
+
       const saved = await socketService.sendMessage({
         roomId,
         content: imageUrl,
         type: "image",
+        replyTo: replyRef?._id,
       });
 
       setMessages((prev) =>
         prev.map((m) => (m._id === tempId ? saved : m))
       );
     } catch (err) {
-      console.warn("Upload error:", err.message);
+      console.warn("Upload error details:", err.response?.data || err.message);
+      setMessages((prev) =>
+        prev.map((m) => (m._id === tempId ? { ...m, status: "failed" } : m))
+      );
     }
   };
 
+  const handleReactToMessage = (messageId, emoji) => {
+    setActiveMessageAction(null);
+    try {
+      socketService.getSocket().emit("message_reaction", { messageId, roomId, emoji });
+    } catch (err) {
+      console.warn("Reaction error:", err.message);
+    }
+  };
+
+  const renderStatus = (item, isMine) => {
+    if (!isMine) return null;
+    if (item.status === "sending") return <Text style={styles.status}>sending...</Text>;
+    if (item.status === "sent") return <Text style={styles.status}>✓</Text>;
+    if (item.status === "delivered") return <Text style={styles.status}>✓✓</Text>;
+    if (item.status === "read") return <Text style={[styles.status, { color: "#4fc3f7" }]}>✓✓</Text>;
+    return null;
+  };
+
   const renderItem = ({ item }) => {
-    const isMine = item.sender._id === currentUserId;
+    const isMine = item.sender?._id === currentUserId;
     return (
-      <View style={[styles.bubble, isMine ? styles.myBubble : styles.theirBubble]}>
-        {item.type === "image" ? (
-          <Image source={{ uri: item.content }} style={styles.imageBubble} />
-        ) : (
-          <Text style={isMine ? styles.myText : styles.theirText}>{item.content}</Text>
-        )}
-        {isMine && <Text style={styles.status}>{item.status}</Text>}
-      </View>
+      <TouchableOpacity
+        activeOpacity={0.9}
+        onLongPress={() => setActiveMessageAction(item)}
+        style={[styles.bubbleWrapper, isMine ? styles.myWrapper : styles.theirWrapper]}
+      >
+        <View style={[styles.bubble, isMine ? styles.myBubble : styles.theirBubble]}>
+          {/* Thread Reply Reference */}
+          {item.replyTo && (
+            <View style={styles.bubbleReplyRef}>
+              <Text style={styles.replyRefUser}>
+                {item.replyTo.sender?.username || "Deleted User"}
+              </Text>
+              <Text style={styles.replyRefText} numberOfLines={1}>
+                {item.replyTo.type === "image" ? "📷 Image" : item.replyTo.content}
+              </Text>
+            </View>
+          )}
+
+          {/* Core Content */}
+          {item.type === "image" ? (
+            <Image source={{ uri: item.content }} style={styles.imageBubble} resizeMode="cover" />
+          ) : (
+            <Text style={isMine ? styles.myText : styles.theirText}>{item.content}</Text>
+          )}
+
+          {/* Reactions Row */}
+          {item.reactions && item.reactions.length > 0 && (
+            <View style={styles.bubbleReactions}>
+              {item.reactions.map((r, i) => (
+                <Text key={i} style={styles.bubbleReactionEmoji}>
+                  {r.emoji}
+                </Text>
+              ))}
+            </View>
+          )}
+
+          {renderStatus(item, isMine)}
+        </View>
+      </TouchableOpacity>
     );
   };
 
@@ -237,7 +357,31 @@ export default function ChatRoomScreen({ route }) {
         renderItem={renderItem}
         contentContainerStyle={styles.list}
       />
-      {otherTyping && <Text style={styles.typing}>Typing…</Text>}
+
+      {/* Typing Indicator */}
+      {otherTyping && (
+        <View style={styles.typingRow}>
+          <Text style={styles.typingText}>Typing</Text>
+          <BouncingDots />
+        </View>
+      )}
+
+      {/* Reply Preview Banner */}
+      {replyingTo && (
+        <View style={styles.replyPreviewBar}>
+          <View style={styles.replyPreviewContent}>
+            <Text style={styles.replyPreviewUser}>Replying to {replyingTo.sender?.username}</Text>
+            <Text style={styles.replyPreviewText} numberOfLines={1}>
+              {replyingTo.type === "image" ? "📷 Image" : replyingTo.content}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={() => setReplyingTo(null)} style={styles.closeReplyBtn}>
+            <Text style={styles.closeReplyText}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Input Row */}
       <View style={styles.inputRow}>
         <TouchableOpacity style={styles.attachBtn} onPress={handleSelectImage}>
           <Text style={{ fontSize: 20 }}>📷</Text>
@@ -252,22 +396,71 @@ export default function ChatRoomScreen({ route }) {
           <Text style={{ color: "#fff" }}>Send</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Message Actions Overlay Sheet */}
+      {activeMessageAction && (
+        <Modal
+          transparent
+          animationType="fade"
+          visible={!!activeMessageAction}
+          onRequestClose={() => setActiveMessageAction(null)}
+        >
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setActiveMessageAction(null)}
+          >
+            <View style={styles.modalContent}>
+              <View style={styles.emojiTray}>
+                {["👍", "❤️", "😂", "😮", "😢", "😡"].map((emoji) => (
+                  <TouchableOpacity
+                    key={emoji}
+                    style={styles.emojiBtn}
+                    onPress={() => handleReactToMessage(activeMessageAction._id, emoji)}
+                  >
+                    <Text style={styles.emojiText}>{emoji}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => {
+                  setReplyingTo(activeMessageAction);
+                  setActiveMessageAction(null);
+                }}
+              >
+                <Text style={styles.actionBtnText}>💬 Reply to Message</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.cancelBtn]}
+                onPress={() => setActiveMessageAction(null)}
+              >
+                <Text style={styles.cancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      )}
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, backgroundColor: "#fff" },
   list: { padding: 12 },
-  bubble: { padding: 10, borderRadius: 12, marginVertical: 4, maxWidth: "75%" },
-  myBubble: { backgroundColor: "#3478f6", alignSelf: "flex-end" },
-  theirBubble: { backgroundColor: "#e5e5ea", alignSelf: "flex-start" },
+  bubbleWrapper: { marginVertical: 4, maxWidth: "75%", flexDirection: "row" },
+  myWrapper: { alignSelf: "flex-end" },
+  theirWrapper: { alignSelf: "flex-start" },
+  bubble: { padding: 10, borderRadius: 12 },
+  myBubble: { backgroundColor: "#3478f6" },
+  theirBubble: { backgroundColor: "#e5e5ea" },
   myText: { color: "#fff" },
   theirText: { color: "#000" },
-  imageBubble: { width: 200, height: 150, borderRadius: 8, resizeMode: "cover" },
+  imageBubble: { width: 200, height: 150, borderRadius: 8 },
   status: { fontSize: 10, color: "#dbe4ff", marginTop: 2, textAlign: "right" },
-  typing: { paddingHorizontal: 12, color: "#888", fontStyle: "italic" },
-  inputRow: { flexDirection: "row", padding: 8, borderTopWidth: 1, borderTopColor: "#eee" },
+  typingRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, marginBottom: 8 },
+  typingText: { color: "#888", fontStyle: "italic", fontSize: 13 },
+  inputRow: { flexDirection: "row", padding: 8, borderTopWidth: 1, borderTopColor: "#eee", alignItems: "center" },
   attachBtn: { justifyContent: "center", alignItems: "center", paddingHorizontal: 8, marginRight: 4 },
   input: {
     flex: 1,
@@ -282,6 +475,90 @@ const styles = StyleSheet.create({
     backgroundColor: "#3478f6",
     borderRadius: 20,
     paddingHorizontal: 16,
+    height: 38,
     justifyContent: "center",
+  },
+  // Threading / Reply styling
+  bubbleReplyRef: {
+    backgroundColor: "rgba(0,0,0,0.06)",
+    borderLeftWidth: 3,
+    borderLeftColor: "#007aff",
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    borderRadius: 4,
+    marginBottom: 6,
+  },
+  replyRefUser: { fontWeight: "bold", fontSize: 11, color: "#007aff" },
+  replyRefText: { fontSize: 12, color: "#555" },
+  replyPreviewBar: {
+    flexDirection: "row",
+    backgroundColor: "#f9f9f9",
+    padding: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#eee",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  replyPreviewContent: { flex: 1, borderLeftWidth: 3, borderLeftColor: "#007aff", paddingLeft: 8 },
+  replyPreviewUser: { fontWeight: "bold", fontSize: 12, color: "#007aff" },
+  replyPreviewText: { fontSize: 12, color: "#666" },
+  closeReplyBtn: { padding: 4, marginLeft: 8 },
+  closeReplyText: { fontSize: 16, color: "#999", fontWeight: "600" },
+  // Reactions styling
+  bubbleReactions: {
+    flexDirection: "row",
+    backgroundColor: "#efeff4",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    alignSelf: "flex-start",
+    marginTop: 4,
+    gap: 2,
+  },
+  bubbleReactionEmoji: { fontSize: 11 },
+  // Modal / Action Sheet styling
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 20,
+  },
+  emojiTray: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  emojiBtn: {
+    padding: 10,
+  },
+  emojiText: {
+    fontSize: 28,
+  },
+  actionBtn: {
+    paddingVertical: 14,
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  actionBtnText: {
+    fontSize: 16,
+    color: "#007aff",
+    fontWeight: "500",
+  },
+  cancelBtn: {
+    borderBottomWidth: 0,
+    marginTop: 10,
+  },
+  cancelBtnText: {
+    fontSize: 16,
+    color: "red",
+    fontWeight: "600",
   },
 });

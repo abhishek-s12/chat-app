@@ -5,6 +5,10 @@ node_modules/
 .env
 .env*.local
 
+# Uploads / Static media
+server/uploads/
+uploads/
+
 # System/IDE configs
 .idea/
 .vscode/
