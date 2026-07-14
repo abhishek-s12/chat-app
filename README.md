@@ -1,4 +1,4 @@
-# 💬 Real-Time Unified Chat Application
+# 💬 Real-Time Unified Simple Chat Application
 
 A complete, feature-rich real-time messaging application featuring a cross-platform **React Native (Expo)** client and a robust **Node.js / Express / Socket.io / MongoDB** backend.
 
