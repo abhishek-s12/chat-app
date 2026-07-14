@@ -6,6 +6,7 @@ const roomSchema = new mongoose.Schema(
     name: { type: String, default: "" }, // used for group rooms
     participants: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     lastMessage: { type: mongoose.Schema.Types.ObjectId, ref: "Message" },
+    pinnedMessage: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
   },
   { timestamps: true }
 );

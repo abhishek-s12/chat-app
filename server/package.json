@@ -19,6 +19,7 @@
     "expo-server-sdk": "^6.1.0",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.3",
+    "link-preview-js": "^4.0.4",
     "mongoose": "^8.5.0",
     "multer": "^2.2.0",
     "socket.io": "^4.8.3"

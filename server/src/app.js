@@ -6,6 +6,7 @@ const messageRoutes = require("./routes/message.routes");
 const roomRoutes = require("./routes/room.routes");
 const userRoutes = require("./routes/user.routes");
 const uploadRoutes = require("./routes/upload.routes");
+const previewRoutes = require("./routes/preview.routes");
 
 
 const app = express();
@@ -23,4 +24,5 @@ app.use("/api", messageRoutes); // /api/conversations, /api/messages/:roomId
 app.use("/api", roomRoutes);
 app.use("/api", userRoutes);
 app.use("/api", uploadRoutes);
+app.use("/api", previewRoutes);
 module.exports = app;

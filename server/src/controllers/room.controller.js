@@ -1,5 +1,6 @@
 const Room = require("../models/Room");
 const User = require("../models/User");
+const Message = require("../models/Message");
 
 // GET /api/users/search?query=john
 const searchUsers = async (req, res) => {
@@ -7,7 +8,7 @@ const searchUsers = async (req, res) => {
   const users = await User.find({
     username: { $regex: query, $options: "i" },
     _id: { $ne: req.userId },
-  }).select("username avatar isOnline").limit(20);
+  }).select("username avatar isOnline lastSeen").limit(20);
   res.json({ users });
 };
 
@@ -19,14 +20,14 @@ const createOrGetDirectRoom = async (req, res) => {
   let room = await Room.findOne({
     type: "direct",
     participants: { $all: [req.userId, participantId], $size: 2 },
-  }).populate("participants", "username avatar isOnline");
+  }).populate("participants", "username avatar isOnline lastSeen");
 
   if (!room) {
     room = await Room.create({
       type: "direct",
       participants: [req.userId, participantId],
     });
-    room = await room.populate("participants", "username avatar isOnline");
+    room = await room.populate("participants", "username avatar isOnline lastSeen");
   }
 
   res.status(201).json({ room });
@@ -39,7 +40,6 @@ const createGroupRoom = async (req, res) => {
     return res.status(400).json({ message: "participantIds array is required" });
   }
 
-  // Ensure current user is in the room and participants are unique
   const uniqueParticipants = [...new Set([...participantIds, req.userId])];
 
   try {
@@ -48,11 +48,34 @@ const createGroupRoom = async (req, res) => {
       name: name || "Group Chat",
       participants: uniqueParticipants,
     });
-    room = await room.populate("participants", "username avatar isOnline");
+    room = await room.populate("participants", "username avatar isOnline lastSeen");
     res.status(201).json({ room });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-module.exports = { searchUsers, createOrGetDirectRoom, createGroupRoom };
+// PATCH /api/rooms/:roomId/pin  { messageId }  -> pin a message (null to unpin)
+const pinMessage = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { messageId } = req.body; // null to unpin
+
+    // Verify the room exists and user is a participant
+    const room = await Room.findOne({ _id: roomId, participants: req.userId });
+    if (!room) return res.status(404).json({ message: "Room not found" });
+
+    room.pinnedMessage = messageId || null;
+    await room.save();
+
+    const pinnedMsg = messageId
+      ? await Message.findById(messageId).populate("sender", "username")
+      : null;
+
+    res.json({ pinnedMessage: pinnedMsg });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = { searchUsers, createOrGetDirectRoom, createGroupRoom, pinMessage };
