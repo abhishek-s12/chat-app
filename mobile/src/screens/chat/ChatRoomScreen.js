@@ -13,7 +13,7 @@ import {
   ActivityIndicator,
   Linking,
 } from "react-native";
-import { Audio } from "expo-av";
+import { Audio, isAudioSupported } from "../../utils/audioHelper";
 import socketService from "../../sockets/socketService";
 import useSocketListener from "../../hooks/useSocketListener";
 import { fetchMessages, searchMessagesApi } from "../../api/messageApi";
@@ -449,6 +449,10 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   // ─── Voice Recording ──────────────────────────────────────────────────────────
   const handleStartRecording = async () => {
+    if (!isAudioSupported) {
+      alert("Voice messages are not supported in this Expo Go environment. Please run a custom dev build or build the APK to use voice messages.");
+      return;
+    }
     try {
       const { granted } = await Audio.requestPermissionsAsync();
       if (!granted) { alert("Microphone permission required"); return; }
@@ -469,7 +473,7 @@ export default function ChatRoomScreen({ route, navigation }) {
   };
 
   const handleStopRecording = async () => {
-    if (!recording) return;
+    if (!isAudioSupported || !recording) return;
     try {
       setIsRecording(false);
       await recording.stopAndUnloadAsync();
@@ -518,6 +522,10 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   // ─── Audio Playback ───────────────────────────────────────────────────────────
   const handlePlayAudio = async (item) => {
+    if (!isAudioSupported) {
+      alert("Audio playback is not supported in this environment.");
+      return;
+    }
     try {
       if (playingAudioId === item._id) {
         // Pause / stop
